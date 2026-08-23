@@ -7,8 +7,7 @@ from typing import List, Dict, Any, Callable, Union, Optional
 from fastapi.responses import JSONResponse, StreamingResponse
 from google.auth.transport.requests import Request as AuthRequest
 from google.genai import types
-from openai import AsyncOpenAI 
-
+from openai import AsyncOpenAI
 
 from models import OpenAIRequest, OpenAIMessage
 from message_processing import (
@@ -20,6 +19,27 @@ from message_processing import (
 import config as app_config
 from config import VERTEX_REASONING_TAG
 
+
+async def _call_with_retry_on_429(call_coro_func, max_attempts: int = 30, delay_seconds: float = 8.0):
+    """
+    call_coro_func: 一个无参数的 async 函数，每次调用会发起一次新的 Gemini 请求
+    遇到 429 / RESOURCE_EXHAUSTED 就等待后重试，直到成功或达到 max_attempts
+    """
+    last_error = None
+    for attempt in range(1, max_attempts + 1):
+        try:
+            return await call_coro_func()
+        except Exception as e:
+            msg = str(e)
+            is_rate_limited = "429" in msg or "RESOURCE_EXHAUSTED" in msg or "RESOURCE EXHAUSTED" in msg
+            if not is_rate_limited:
+                raise
+            last_error = e
+            print(f"WARNING: 429 触发，第 {attempt}/{max_attempts} 次重试，{delay_seconds}s 后重试...")
+            await asyncio.sleep(delay_seconds)
+    raise last_error
+
+
 class StreamingReasoningProcessor:
     def __init__(self, tag_name: str = VERTEX_REASONING_TAG):
         self.tag_name = tag_name
@@ -28,7 +48,7 @@ class StreamingReasoningProcessor:
         self.tag_buffer = ""
         self.inside_tag = False
         self.reasoning_buffer = ""
-        self.partial_tag_buffer = "" 
+        self.partial_tag_buffer = ""
 
     def process_chunk(self, content: str) -> tuple[str, str]:
         if self.partial_tag_buffer:
@@ -48,7 +68,8 @@ class StreamingReasoningProcessor:
                             if len(self.tag_buffer) > i:
                                 processed_content += self.tag_buffer[:-i]
                                 self.partial_tag_buffer = self.tag_buffer[-i:]
-                            else: self.partial_tag_buffer = self.tag_buffer
+                            else:
+                                self.partial_tag_buffer = self.tag_buffer
                             self.tag_buffer = ""
                             break
                     if not partial_match:
@@ -59,7 +80,7 @@ class StreamingReasoningProcessor:
                     processed_content += self.tag_buffer[:open_pos]
                     self.tag_buffer = self.tag_buffer[open_pos + len(self.open_tag):]
                     self.inside_tag = True
-            else: 
+            else:
                 close_pos = self.tag_buffer.find(self.close_tag)
                 if close_pos == -1:
                     partial_match = False
@@ -69,9 +90,11 @@ class StreamingReasoningProcessor:
                             if len(self.tag_buffer) > i:
                                 new_reasoning = self.tag_buffer[:-i]
                                 self.reasoning_buffer += new_reasoning
-                                if new_reasoning: current_reasoning = new_reasoning
+                                if new_reasoning:
+                                    current_reasoning = new_reasoning
                                 self.partial_tag_buffer = self.tag_buffer[-i:]
-                            else: self.partial_tag_buffer = self.tag_buffer
+                            else:
+                                self.partial_tag_buffer = self.tag_buffer
                             self.tag_buffer = ""
                             break
                     if not partial_match:
@@ -83,10 +106,52 @@ class StreamingReasoningProcessor:
                 else:
                     final_reasoning_chunk = self.tag_buffer[:close_pos]
                     self.reasoning_buffer += final_reasoning_chunk
-                    if final_reasoning_chunk: current_reasoning = final_reasoning_chunk
-                    self.reasoning_buffer = "" 
+                    if final_reasoning_chunk:
+                        current_reasoning = final_reasoning_chunk
+                    self.reasoning_buffer = ""
                     self.tag_buffer = self.tag_buffer[close_pos + len(self.close_tag):]
                     self.inside_tag = False
+        return processed_content, current_reasoning
+
+    def flush_remaining(self) -> tuple[str, str]:
+        remaining_content, remaining_reasoning = "", ""
+        if self.partial_tag_buffer:
+            remaining_content += self.partial_tag_buffer
+            self.partial_tag_buffer = ""
+        if not self.inside_tag:
+            if self.tag_buffer:
+                remaining_content += self.tag_buffer
+        else:
+            if self.reasoning_buffer:
+                remaining_reasoning = self.reasoning_buffer
+            if self.tag_buffer:
+                remaining_content += self.tag_buffer
+            self.inside_tag = False
+        self.tag_buffer, self.reasoning_buffer = "", ""
+        return remaining_content, remaining_reasoning
+
+
+def create_openai_error_response(status_code: int, message: str, error_type: str) -> Dict[str, Any]:
+    return {"error": {"message": message, "type": error_type, "code": status_code, "param": None}}
+
+
+def create_generation_config(request: OpenAIRequest) -> Dict[str, Any]:
+    config: Dict[str, Any] = {}
+    if request.temperature is not None: config["temperature"] = request.temperature
+    if request.max_tokens is not None: config["max_output_tokens"] = request.max_tokens
+    if request.top_p is not None: config["top_p"] = request.top_p
+    if request.top_k is not None: config["top_k"] = request.top_k
+    if request.stop is not None: config["stop_sequences"] = request.stop
+    if request.seed is not None: config["seed"] = request.seed
+    if request.n is not None: config["candidate_count"] = request.n
+
+    safety_threshold = "BLOCK_NONE" if app_config.SAFETY_SCORE else "BLOCK_ONLY_HIGH"
+    config["safety_settings"] = [
+        types.SafetySetting(category="HARM_CATEGORY_HATE_SPEECH", threshold=safety_threshold),
+        types.SafetySetting(category="HARM_CATEGORY_DANGEROUS_CONTENT", threshold=safety_threshold),
+        types.SafetySetting(category="HARM_CATEGORY_SEXUALLY_EXPLICIT", threshold=safety_threshold),
+        types.SafetySetting(category="HARM_CATEGORY_HARASSMENT", threshold=safety_threshold),
+        types.Sa                    self.inside_tag = False
         return processed_content, current_reasoning
     
     def flush_remaining(self) -> tuple[str, str]:
@@ -280,13 +345,13 @@ async def gemini_fake_stream_generator(
     model_name_for_log = getattr(gemini_client_instance, 'model_name', 'unknown_gemini_model_object')
     print(f"FAKE STREAMING (Gemini): Prep for '{request_obj.model}' (API model string: '{model_for_api_call}', client obj: '{model_name_for_log}')")
     
-    api_call_task = asyncio.create_task(
-        gemini_client_instance.aio.models.generate_content(
-            model=model_for_api_call, 
-            contents=prompt_for_api_call, 
+    async def _do_call():
+        return await gemini_client_instance.aio.models.generate_content(
+            model=model_for_api_call,
+            contents=prompt_for_api_call,
             config=gen_config_dict_for_api_call # Pass the dictionary directly
         )
-    )
+    api_call_task = asyncio.create_task(_call_with_retry_on_429(_do_call))
 
     outer_keep_alive_interval = app_config.FAKE_STREAMING_INTERVAL_SECONDS
     if outer_keep_alive_interval > 0:
@@ -444,11 +509,13 @@ async def execute_gemini_call(
                     raise e_stream_call
             return StreamingResponse(_gemini_real_stream_generator_inner(), media_type="text/event-stream")
     else: # Non-streaming
-        response_obj_call = await current_client.aio.models.generate_content(
-            model=model_to_call, 
-            contents=actual_prompt_for_call,
-            config=gen_config_dict # Pass the dictionary directly
-        )
+        async def _do_call():
+            return await current_client.aio.models.generate_content(
+                model=model_to_call,
+                contents=actual_prompt_for_call,
+                config=gen_config_dict
+    )
+        response_obj_call = await _call_with_retry_on_429(_do_call)
         if hasattr(response_obj_call, 'prompt_feedback') and \
            hasattr(response_obj_call.prompt_feedback, 'block_reason') and \
            response_obj_call.prompt_feedback.block_reason:
