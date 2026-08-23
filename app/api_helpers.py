@@ -31,8 +31,9 @@ async def _call_with_retry_on_429(call_coro_func, max_attempts: int = 30, delay_
             return await call_coro_func()
         except Exception as e:
             msg = str(e)
-            is_rate_limited = "429" in msg or "RESOURCE_EXHAUSTED" in msg or "RESOURCE EXHAUSTED" in msg
-            if not is_rate_limited:
+            is_retryable = ("429" in msg or "RESOURCE_EXHAUSTED" in msg or "RESOURCE EXHAUSTED" in msg
+                             or "network error" in msg.lower() or "connection" in msg.lower())
+            if not is_retryable:
                 raise
             last_error = e
             print(f"WARNING: 429 触发，第 {attempt}/{max_attempts} 次重试，{delay_seconds}s 后重试...")
