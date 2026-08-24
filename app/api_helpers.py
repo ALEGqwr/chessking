@@ -20,7 +20,7 @@ import config as app_config
 from config import VERTEX_REASONING_TAG
 
 
-async def _call_with_retry_on_429(call_coro_func, max_attempts: int = 15, delay_seconds: float = 7.0):
+async def _call_with_retry_on_429(call_coro_func, max_attempts: int = 15, delay_seconds: float = 12.0):
     """
     call_coro_func: 一个无参数的 async 函数，每次调用会发起一次新的 Gemini 请求
     遇到 429 / RESOURCE_EXHAUSTED 就等待后重试，直到成功或达到 max_attempts
