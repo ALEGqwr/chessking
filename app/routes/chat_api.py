@@ -100,7 +100,7 @@ async def chat_completions(fastapi_request: Request, request: OpenAIRequest, api
         # This will now be a dictionary
         gen_config_dict = create_generation_config(request)
 
-        if "gemini-2.5-pro" in base_model_name or "gemini-2.5-flash" in base_model_name or "gemini-4" in base_model_name:
+        if "gemini-2.5-pro" in base_model_name or "gemini-2.5-flash" in base_model_name:
             if "thinking_config" not in gen_config_dict:
                 gen_config_dict["thinking_config"] = {}
             gen_config_dict["thinking_config"]["include_thoughts"] = True
@@ -130,7 +130,7 @@ async def chat_completions(fastapi_request: Request, request: OpenAIRequest, api
                     original_idx, key_val = key_tuple
                     try:
                         # Check if model contains "gemini-2.5-pro" or "gemini-2.5-flash" for direct URL approach
-                        if "gemini-2.5-pro" in base_model_name or "gemini-2.5-flash" in base_model_name:
+                        if "gemini-2.5-pro" in base_model_name or "gemini-2.5-flash" in base_model_name or "gemini-4" in base_model_name:
                             project_id = await discover_project_id(key_val)
                             base_url = f"https://aiplatform.googleapis.com/v1/projects/{project_id}/locations/global"
                             client_to_use = genai.Client(
