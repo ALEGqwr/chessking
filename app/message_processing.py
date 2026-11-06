@@ -72,9 +72,12 @@ def create_gemini_prompt(messages: List[OpenAIMessage]) -> List[types.Content]:
                     parsed_arguments = {} 
                 
                 if function_name:
-                    parts.append(types.Part.from_function_call(
-                        name=function_name,
-                        args=parsed_arguments
+                    parts.append(types.Part(
+                        function_call=types.FunctionCall(
+                            name=function_name,
+                            args=parsed_arguments
+                        ),
+                        thought_signature=b"skip_thought_signature_validator"
                     ))
             
             if message.content: 
